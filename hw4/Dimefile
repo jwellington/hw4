@@ -1,0 +1,25 @@
+# this is the Dimefile to give an example of what you should be able
+# this is the example from the writeup
+
+target1: rulea ruleb rulec {
+   t1 line1
+}
+
+rulea: {
+ one line
+ two lines
+}
+
+ruleb: {
+ red line
+ blue line
+}
+
+rulec: {
+ this one
+ has
+ a
+ bunch
+ of
+ lines
+}
