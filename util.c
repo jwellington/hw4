@@ -111,7 +111,7 @@ rule_node_t* rule_node_create(rule_t* rule) {
  * free a rule_node
  *************/
 void rule_node_free(rule_node_t* node) {
-	rule_free(node->rule);
+	if (node->rule != NULL) { rule_free(node->rule); }
 	if(node->next != NULL) { rule_node_free(node->next); }
 	free(node);
 }
@@ -175,4 +175,24 @@ pid_node_t* pid_node_create(pid_t pid) {
 void pid_node_free(pid_node_t* node) {
 	if(node->next != NULL) { pid_node_free(node->next); }
 	free(node);
+}
+
+//Print message and exit
+void error(char* message)
+{
+    printf("Error: %s\n", message);
+    exit(1);
+}
+
+//Find the length of the linked list of rules.
+int queue_length(rule_node_t* start)
+{
+    rule_node_t* ptr = start;
+    int length = 0;
+    while (ptr != NULL)
+    {
+        length++;
+        ptr = ptr->next;
+    }
+    return length;
 }

@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include <pthread.h>
 
 // the following ifdef/def pair prevents us from having problems if 
 // we've included util.h in multiple places... it's a handy trick
@@ -65,5 +66,15 @@ void pid_node_free(pid_node_t*);
 // string munging functions
 char* trim(char*);
 char** get_argvec(char*);
+
+void error(char*);
+
+int queue_length(rule_node_t*);
+
+//List of pthreads
+typedef struct pthread_node{
+    pthread_t* thread;
+    struct pthread_node* next;
+} PTHREAD_NODE;
 
 #endif

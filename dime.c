@@ -90,36 +90,42 @@ void exec_target_rec(rule_t* rule, rule_node_t* list) {
 			}
 		}
 	}
-
+    
+    //Should add the target to the queue instead so helper threads can exec
 	fake_exec(rule);
 }
 
 /***********
  * Function for 'fake execing' for HW4.
- * Don't exec, just print commandlines and wait 1 sec per commandline
+ * Don't exec, just print commandlines and wait TIME_DELAY usecs per commandline
  ***********/
 void fake_exec(rule_t* rule) {
 	str_node_t* sptr;
 	for(sptr = rule->commandlines; sptr != NULL; sptr = sptr->next) {
 		printf("%s\n",sptr->str);
-		usleep(500000);
+		usleep(LINE_DELAY);
 	}
 }
 
 /*********
  * Given a target list and the list of rules, execute the targets.
  *********/
-void execute_targets(int targetc, char* targetv[], rule_node_t* list) {
+void execute_targets(int targetc, char* targetv[], rule_node_t* list,
+                     rule_node_t* queue, int max_queue_length) {
 	rule_node_t* ptr = list;
 	int i;
 	if(targetc == 0) {
 		// no target specified on command line!
+		//Go to the last rule (which was first in the file) and run it
 		for(ptr = list; ptr->next != NULL; ptr = ptr->next);
-		if(ptr == NULL) {
-			fprintf(stderr, "Error, no targets in dimefile.\n");
-		} else {
-			exec_target_rec(ptr->rule, list);
+		{
+		    //Do nothing, we're just getting to the last rule
 		}
+	    if(ptr == NULL) {
+		    fprintf(stderr, "Error, no targets in dimefile.\n");
+	    } else {
+		    exec_target_rec(ptr->rule, list);
+	    }
 	} else {
 		for(i = 0; i < targetc; i++) {
 			for(ptr = list; ptr != NULL; ptr = ptr->next) {
@@ -136,15 +142,29 @@ void execute_targets(int targetc, char* targetv[], rule_node_t* list) {
 	}
 }
 
+void* helper_thread(void* args)
+{
+    //Unpack args
+    str_node_t* args_queue = (str_node_t*)args;
+    rule_node_t* queue = (rule_node_t*)(args_queue->str);
+    int queue_size = atoi((char*)(args_queue->next->str));
+    
+    //Check queue and "execute" targets on it
+    printf("Thread created.\n");
+}
+
 int main(int argc, char* argv[]) {
 	// Declarations for getopt
 	extern int optind;
 	extern char* optarg;
 	int ch;
-	char* format = "f:h";
+	char* format = "f:hq:t:";
 	
 	// Variables you'll want to use
 	char* filename = "Dimefile";
+	
+	int num_threads = 3;
+	char* queue_size = "-1";
 
 	// Part 2.2.1: Use getopt code to take input appropriately.
 	while((ch = getopt(argc, argv, format)) != -1) {
@@ -155,14 +175,75 @@ int main(int argc, char* argv[]) {
 			case 'h':
 				dime_usage(argv[0]);
 				break;
+	        case 't':
+	            num_threads = atoi(optarg);
+	            if (num_threads < 1)
+	            {
+	                error("The number of helper threads must be at least 1.");
+	            }
+	            break;
+	        case 'q':
+	            queue_size = optarg;
+	            if (atoi(queue_size) < 1)
+	            {
+	                error("The queue size must be at least 1.");
+	            }
+	            break;
 		}
 	}
 	argc -= optind;
 	argv += optind;
+	
+	//Set up queue for targets
+	rule_node_t* rule_queue = (rule_node_t*)(malloc(sizeof(rule_node_t)));
+	
+	//Set up threads
+	PTHREAD_NODE* threads = NULL;
+	int i;
+	for (i = 0; i < num_threads; i++)
+	{
+	    str_node_t size_node;
+	    size_node.str = queue_size;
+	    str_node_t queue_node;
+	    queue_node.str = (char*)(rule_queue);
+	    queue_node.next = &size_node;
+	    pthread_t* thread = (pthread_t*)(malloc(sizeof(pthread_t)));
+	    if (pthread_create(thread, NULL, helper_thread, (void*)(&queue_node)) != 0)
+	    {
+	        error("Failed to create helper thread.");
+	    }
+	    else
+	    {
+	        PTHREAD_NODE* cur_node = (PTHREAD_NODE*)(malloc(sizeof(PTHREAD_NODE)));
+	        cur_node->thread = thread;
+	        cur_node->next = threads;
+	        threads = cur_node;
+	    }
+	}
 
 	// parse the given file, then execute targets
 	rule_node_t* list = parse_file(filename);
-	execute_targets(argc, argv, list);
+	execute_targets(argc, argv, list, rule_queue, atoi(queue_size));
 	rule_node_free(list);
+	rule_node_free(rule_queue);
+	
+	//Rejoin threads
+	PTHREAD_NODE* pthread_ptr = threads;
+	while (pthread_ptr != NULL)
+	{
+        if (pthread_join(*(pthread_ptr->thread),NULL) != 0)
+        {
+            error("Couldn't join helper thread.");
+        }
+        else
+        {
+            printf("Joined helper thread.\n");
+        }
+        PTHREAD_NODE* temp = pthread_ptr;
+        pthread_ptr = pthread_ptr->next;
+        free(temp->thread);
+        free(temp);
+	}
+	
 	return 0;
 }
