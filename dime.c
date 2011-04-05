@@ -164,7 +164,7 @@ int main(int argc, char* argv[]) {
 	char* filename = "Dimefile";
 	
 	int num_threads = 3;
-	char* queue_size = "-1";
+	char* queue_size = "5";
 
 	// Part 2.2.1: Use getopt code to take input appropriately.
 	while((ch = getopt(argc, argv, format)) != -1) {
