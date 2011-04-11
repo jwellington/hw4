@@ -12,6 +12,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <semaphore.h>
+
+pthread_mutex_t mutex;
+pthread_cond_t queue_full;
+pthread_cond_t queue_empty;
 
 /*********
  * Simple usage instructions
@@ -79,20 +84,53 @@ rule_node_t* parse_file(char* filename) {
 /**************
  * Exec targets with recursive calls
  **************/
-void exec_target_rec(rule_t* rule, rule_node_t* list) {
+void exec_target_rec(rule_t* rule, rule_node_t* list, ARG_HOLDER* argholder) {
 	str_node_t* sptr;
 	rule_node_t* rptr;
 	for(sptr = rule->deps; sptr != NULL; sptr = sptr->next) {
 		// for each dependency, see if there's a rule, then exec that rule
 		for(rptr = list; rptr != NULL; rptr = rptr->next) {
 			if(strcmp(sptr->str, rptr->rule->target) == 0) {
-				exec_target_rec(rptr->rule, list);
+				exec_target_rec(rptr->rule, list, argholder);
 			}
 		}
 	}
     
     //Should add the target to the queue instead so helper threads can exec
-	fake_exec(rule);
+	//fake_exec(rule);
+	rule_node_t* queue = argholder->rule_queue;
+	int max_queue_length = argholder->max_queue_length;
+	
+	int ql = queue_length(queue) - 1;
+	int empty_queue = 0;
+	if (ql == max_queue_length + 1)
+	{
+	    //Wait for the queue length to go down
+	    pthread_cond_wait(&queue_full, &mutex);
+	}
+	else if (ql == 1)
+	{
+	    empty_queue = 1;
+	}
+    //Attach the new target to the back of the queue
+    pthread_mutex_lock(&mutex);
+    rule_node_t* qnode = queue;
+    rule_node_t* qnext = qnode->next;
+    while (qnext != NULL)
+    {
+        qnode = qnext;
+        qnext = qnode->next;
+    }
+    rule_node_t* new_node = (rule_node_t*)(malloc(sizeof(rule_node_t)));
+    new_node->rule = rule;
+    new_node->next = NULL;
+    qnode->next = new_node;
+    pthread_mutex_unlock(&mutex);
+    //If the queue was empty, signal the helper threads that it is not
+    if (empty_queue)
+    {
+        pthread_cond_broadcast(&queue_empty);
+    }
 }
 
 /***********
@@ -111,7 +149,7 @@ void fake_exec(rule_t* rule) {
  * Given a target list and the list of rules, execute the targets.
  *********/
 void execute_targets(int targetc, char* targetv[], rule_node_t* list,
-                     rule_node_t* queue, int max_queue_length) {
+                     ARG_HOLDER* argholder) {
 	rule_node_t* ptr = list;
 	int i;
 	if(targetc == 0) {
@@ -124,13 +162,13 @@ void execute_targets(int targetc, char* targetv[], rule_node_t* list,
 	    if(ptr == NULL) {
 		    fprintf(stderr, "Error, no targets in dimefile.\n");
 	    } else {
-		    exec_target_rec(ptr->rule, list);
+		    exec_target_rec(ptr->rule, list, argholder);
 	    }
 	} else {
 		for(i = 0; i < targetc; i++) {
 			for(ptr = list; ptr != NULL; ptr = ptr->next) {
 				if(strcmp(targetv[i], ptr->rule->target) == 0) {
-					exec_target_rec(ptr->rule, list);
+					exec_target_rec(ptr->rule, list, argholder);
 					break;
 				}
 			}
@@ -140,17 +178,55 @@ void execute_targets(int targetc, char* targetv[], rule_node_t* list,
 			}
 		}
 	}
+	
+	int* done = argholder->done;
+	*done = 1;
+	pthread_cond_broadcast(&queue_empty);
 }
 
 void* helper_thread(void* args)
 {
     //Unpack args
-    str_node_t* args_queue = (str_node_t*)args;
-    rule_node_t* queue = (rule_node_t*)(args_queue->str);
-    int queue_size = atoi((char*)(args_queue->next->str));
+    ARG_HOLDER* argholder = (ARG_HOLDER*)(args);
+    rule_node_t* queue = argholder->rule_queue;
+    int queue_size = argholder->max_queue_length;
+    int* done = argholder->done;
     
-    //Check queue and "execute" targets on it
-    printf("Thread created.\n");
+    printf("Starting thread.\n");
+    while (!(*done))
+    {
+        //Check queue and "execute" targets on it
+	    int ql = queue_length(queue);
+	    int full_queue = 0;
+	    if (ql <= 1)
+	    {
+	        //Wait for the queue length to go up
+	        pthread_cond_wait(&queue_empty, &mutex);
+	    }
+	    else if (ql == queue_size + 1)
+	    {
+	        full_queue = 1;
+	    }
+	    if (!(*done))
+        {
+            //Remove the first target from the queue and "execute" it
+            pthread_mutex_lock(&mutex);
+            rule_node_t* first_node = queue->next;
+            rule_node_t* qnode = first_node->next;
+            rule_t* cur_rule = first_node->rule;
+            queue->next = qnode;
+            free(first_node);
+            pthread_mutex_unlock(&mutex);
+            //If the queue was full, signal the main thread that it is not
+            if (full_queue)
+            {
+                pthread_cond_broadcast(&queue_full);
+            }
+            
+            fake_exec(cur_rule);
+        }
+    }
+    return NULL;
 }
 
 int main(int argc, char* argv[]) {
@@ -196,19 +272,28 @@ int main(int argc, char* argv[]) {
 	
 	//Set up queue for targets
 	rule_node_t* rule_queue = (rule_node_t*)(malloc(sizeof(rule_node_t)));
+	//The first "real" entry of rule_queue is the second, so we can change it
+	//while keeping the address of rule_queue constant
+	rule_queue->rule = NULL;
+	rule_queue->next = NULL;
+	
+	ARG_HOLDER argholder;
+	argholder.rule_queue = rule_queue;
+	argholder.max_queue_length = atoi(queue_size);
+	int done = 0;
+	argholder.done = &done;
+	
+	pthread_mutex_init(&mutex, NULL);
+	pthread_cond_init(&queue_full, NULL);
+	pthread_cond_init(&queue_empty, NULL);
 	
 	//Set up threads
 	PTHREAD_NODE* threads = NULL;
 	int i;
 	for (i = 0; i < num_threads; i++)
 	{
-	    str_node_t size_node;
-	    size_node.str = queue_size;
-	    str_node_t queue_node;
-	    queue_node.str = (char*)(rule_queue);
-	    queue_node.next = &size_node;
 	    pthread_t* thread = (pthread_t*)(malloc(sizeof(pthread_t)));
-	    if (pthread_create(thread, NULL, helper_thread, (void*)(&queue_node)) != 0)
+	    if (pthread_create(thread, NULL, helper_thread, (void*)(&argholder)) != 0)
 	    {
 	        error("Failed to create helper thread.");
 	    }
@@ -223,14 +308,15 @@ int main(int argc, char* argv[]) {
 
 	// parse the given file, then execute targets
 	rule_node_t* list = parse_file(filename);
-	execute_targets(argc, argv, list, rule_queue, atoi(queue_size));
+	execute_targets(argc, argv, list, &argholder);
 	rule_node_free(list);
-	rule_node_free(rule_queue);
+	rule_queue_free(rule_queue);
 	
 	//Rejoin threads
 	PTHREAD_NODE* pthread_ptr = threads;
 	while (pthread_ptr != NULL)
 	{
+	    printf("Attmpting join.\n");
         if (pthread_join(*(pthread_ptr->thread),NULL) != 0)
         {
             error("Couldn't join helper thread.");
@@ -244,6 +330,10 @@ int main(int argc, char* argv[]) {
         free(temp->thread);
         free(temp);
 	}
+	
+	pthread_mutex_destroy(&mutex);
+	pthread_cond_destroy(&queue_full);
+	pthread_cond_destroy(&queue_empty);
 	
 	return 0;
 }

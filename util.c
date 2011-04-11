@@ -65,7 +65,7 @@ rule_t* rule_create(char* target) {
 
 /************
  * add a dependency to a rule
- *************/
+\ *************/
 void rule_add_dep(rule_t* rule, char* dep) {
 	if(rule->deps == NULL) { rule->deps = str_node_create(dep); }
 	else {
@@ -195,4 +195,10 @@ int queue_length(rule_node_t* start)
         ptr = ptr->next;
     }
     return length;
+}
+
+//Frees a node in the rule queue, assuming the rules have already been freed.
+void rule_queue_free(rule_node_t* node) {
+	if(node->next != NULL) { rule_queue_free(node->next); }
+	free(node);
 }

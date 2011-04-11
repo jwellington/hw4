@@ -71,10 +71,17 @@ void error(char*);
 
 int queue_length(rule_node_t*);
 
+void rule_queue_free(rule_node_t*);
+
 //List of pthreads
 typedef struct pthread_node{
     pthread_t* thread;
     struct pthread_node* next;
 } PTHREAD_NODE;
 
+typedef struct arg_holder{
+    rule_node_t* rule_queue;
+    int max_queue_length;
+    int* done;
+} ARG_HOLDER;
 #endif
