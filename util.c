@@ -202,3 +202,11 @@ void rule_queue_free(rule_node_t* node) {
 	if(node->next != NULL) { rule_queue_free(node->next); }
 	free(node);
 }
+
+//Function to make a thread wait for a signal
+void cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex)
+{
+    pthread_mutex_lock(mutex);
+    pthread_cond_wait(cond, mutex);
+    pthread_mutex_unlock(mutex);
+}

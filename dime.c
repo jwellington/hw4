@@ -17,7 +17,6 @@
 pthread_mutex_t mutex;
 pthread_mutex_t mutex_main_thread;
 sem_t sem_lock;
-pthread_mutex_t mutex_done;
 pthread_cond_t queue_full;
 pthread_cond_t queue_empty;
 pthread_cond_t finished_execution;
@@ -110,8 +109,7 @@ void exec_target_rec(rule_t* rule, rule_node_t* list, ARG_HOLDER* argholder) {
 	if (ql == max_queue_length)
 	{
 	    //Wait for the queue length to go down
-	    pthread_cond_wait(&queue_full, &mutex);
-	    pthread_mutex_unlock(&mutex);
+	    cond_wait(&queue_full, &mutex);
 	}
 	else if (ql == 0)
 	{
@@ -186,8 +184,7 @@ void execute_targets(int targetc, char* targetv[], rule_node_t* list,
 	argholder->finished_adding = 1;
 	while (argholder->threads_not_done > 0)
 	{
-	    pthread_cond_wait(&finished_execution, &mutex_done);
-	    pthread_mutex_unlock(&mutex_done);
+	    cond_wait(&finished_execution, &mutex);
 	}
 }
 
@@ -208,10 +205,9 @@ void* helper_thread(void* args)
 	    {
 	        //Wait for the queue length to go up
 	        printf("Thread %d sleeping.\n", threadno);
-	        pthread_cond_wait(&queue_empty, &mutex);
+	        cond_wait(&queue_empty, &mutex);
 	        ql = queue_length(queue) - 1;
 	        printf("Thread %d waking up.\n", threadno);
-	        pthread_mutex_unlock(&mutex);
 	    }
 	    if (ql == queue_size)
 	    {
@@ -313,7 +309,6 @@ int main(int argc, char* argv[]) {
 	pthread_mutex_init(&mutex, NULL);
 	pthread_mutex_init(&mutex_main_thread, NULL);
 	sem_init(&sem_lock, 0, 1);
-	pthread_mutex_init(&mutex_done, NULL);
 	pthread_cond_init(&queue_full, NULL);
 	pthread_cond_init(&queue_empty, NULL);
 	pthread_cond_init(&finished_execution, NULL);
@@ -366,7 +361,6 @@ int main(int argc, char* argv[]) {
 	pthread_mutex_destroy(&mutex);
 	pthread_mutex_destroy(&mutex_main_thread);
 	sem_destroy(&sem_lock);
-	pthread_mutex_destroy(&mutex_done);
 	pthread_cond_destroy(&queue_full);
 	pthread_cond_destroy(&queue_empty);
 	pthread_cond_destroy(&finished_execution);

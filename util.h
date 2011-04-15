@@ -73,6 +73,8 @@ int queue_length(rule_node_t*);
 
 void rule_queue_free(rule_node_t*);
 
+void cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex);
+
 //List of pthreads
 typedef struct pthread_node{
     pthread_t* thread;
