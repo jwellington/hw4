@@ -15,7 +15,6 @@
 #include <semaphore.h>
 
 pthread_mutex_t mutex;
-pthread_mutex_t mutex_main_thread;
 sem_t sem_lock;
 pthread_cond_t queue_full;
 pthread_cond_t queue_empty;
@@ -204,10 +203,8 @@ void* helper_thread(void* args)
 	    while (!argholder->done && ql == 0)
 	    {
 	        //Wait for the queue length to go up
-	        printf("Thread %d sleeping.\n", threadno);
 	        cond_wait(&queue_empty, &mutex);
 	        ql = queue_length(queue) - 1;
-	        printf("Thread %d waking up.\n", threadno);
 	    }
 	    if (ql == queue_size)
 	    {
@@ -217,7 +214,6 @@ void* helper_thread(void* args)
         {
             //Remove the first target from the queue and "execute" it
             sem_wait(&sem_lock);
-            printf("     %d.\n", ql);
             rule_node_t* first_node = queue->next;
             rule_node_t* qnode = first_node->next;
             rule_t* cur_rule = first_node->rule;
@@ -245,7 +241,7 @@ void* helper_thread(void* args)
     argholder->threads_not_done--;
     pthread_cond_broadcast(&queue_empty);
     pthread_cond_signal(&finished_execution);
-    printf("Thread %d exiting.\n", threadno);
+    //printf("Thread %d exiting.\n", threadno);
     return NULL;
 }
 
@@ -307,7 +303,6 @@ int main(int argc, char* argv[]) {
 	argholder.done = 0;
 	
 	pthread_mutex_init(&mutex, NULL);
-	pthread_mutex_init(&mutex_main_thread, NULL);
 	sem_init(&sem_lock, 0, 1);
 	pthread_cond_init(&queue_full, NULL);
 	pthread_cond_init(&queue_empty, NULL);
@@ -343,7 +338,6 @@ int main(int argc, char* argv[]) {
 	PTHREAD_NODE* pthread_ptr = threads;
 	while (pthread_ptr != NULL)
 	{
-	    printf("Attempting join.\n");
         if (pthread_join(*(pthread_ptr->thread),NULL) != 0)
         {
             error("Couldn't join helper thread.");
@@ -359,7 +353,6 @@ int main(int argc, char* argv[]) {
 	}
 	
 	pthread_mutex_destroy(&mutex);
-	pthread_mutex_destroy(&mutex_main_thread);
 	sem_destroy(&sem_lock);
 	pthread_cond_destroy(&queue_full);
 	pthread_cond_destroy(&queue_empty);
