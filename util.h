@@ -81,7 +81,10 @@ typedef struct pthread_node{
 
 typedef struct arg_holder{
     rule_node_t* rule_queue;
+    rule_node_t* output_queue;
+    int finished_adding;
     int max_queue_length;
-    int* done;
+    int done;
+    int threads_not_done;
 } ARG_HOLDER;
 #endif

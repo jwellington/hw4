@@ -15,8 +15,12 @@
 #include <semaphore.h>
 
 pthread_mutex_t mutex;
+pthread_mutex_t mutex_main_thread;
+sem_t sem_lock;
+pthread_mutex_t mutex_done;
 pthread_cond_t queue_full;
 pthread_cond_t queue_empty;
+pthread_cond_t finished_execution;
 
 /*********
  * Simple usage instructions
@@ -103,17 +107,18 @@ void exec_target_rec(rule_t* rule, rule_node_t* list, ARG_HOLDER* argholder) {
 	
 	int ql = queue_length(queue) - 1;
 	int empty_queue = 0;
-	if (ql == max_queue_length + 1)
+	if (ql == max_queue_length)
 	{
 	    //Wait for the queue length to go down
 	    pthread_cond_wait(&queue_full, &mutex);
+	    pthread_mutex_unlock(&mutex);
 	}
-	else if (ql == 1)
+	else if (ql == 0)
 	{
 	    empty_queue = 1;
 	}
     //Attach the new target to the back of the queue
-    pthread_mutex_lock(&mutex);
+    sem_wait(&sem_lock);
     rule_node_t* qnode = queue;
     rule_node_t* qnext = qnode->next;
     while (qnext != NULL)
@@ -125,11 +130,11 @@ void exec_target_rec(rule_t* rule, rule_node_t* list, ARG_HOLDER* argholder) {
     new_node->rule = rule;
     new_node->next = NULL;
     qnode->next = new_node;
-    pthread_mutex_unlock(&mutex);
+    sem_post(&sem_lock);
     //If the queue was empty, signal the helper threads that it is not
     if (empty_queue)
     {
-        pthread_cond_broadcast(&queue_empty);
+        pthread_cond_signal(&queue_empty);
     }
 }
 
@@ -178,10 +183,12 @@ void execute_targets(int targetc, char* targetv[], rule_node_t* list,
 			}
 		}
 	}
-	
-	int* done = argholder->done;
-	*done = 1;
-	pthread_cond_broadcast(&queue_empty);
+	argholder->finished_adding = 1;
+	while (argholder->threads_not_done > 0)
+	{
+	    pthread_cond_wait(&finished_execution, &mutex_done);
+	    pthread_mutex_unlock(&mutex_done);
+	}
 }
 
 void* helper_thread(void* args)
@@ -190,33 +197,37 @@ void* helper_thread(void* args)
     ARG_HOLDER* argholder = (ARG_HOLDER*)(args);
     rule_node_t* queue = argholder->rule_queue;
     int queue_size = argholder->max_queue_length;
-    int* done = argholder->done;
-    
-    printf("Starting thread.\n");
-    while (!(*done))
+    argholder->threads_not_done++;
+    int threadno = argholder->threads_not_done;
+	int ql = queue_length(queue) - 1;
+    while (!argholder->finished_adding || ql > 0)
     {
         //Check queue and "execute" targets on it
-	    int ql = queue_length(queue);
 	    int full_queue = 0;
-	    if (ql <= 1)
+	    while (!argholder->done && ql == 0)
 	    {
 	        //Wait for the queue length to go up
+	        printf("Thread %d sleeping.\n", threadno);
 	        pthread_cond_wait(&queue_empty, &mutex);
+	        ql = queue_length(queue) - 1;
+	        printf("Thread %d waking up.\n", threadno);
+	        pthread_mutex_unlock(&mutex);
 	    }
-	    else if (ql == queue_size + 1)
+	    if (ql == queue_size)
 	    {
 	        full_queue = 1;
 	    }
-	    if (!(*done))
+	    if (ql > 0 && !argholder->done)
         {
             //Remove the first target from the queue and "execute" it
-            pthread_mutex_lock(&mutex);
+            sem_wait(&sem_lock);
+            printf("     %d.\n", ql);
             rule_node_t* first_node = queue->next;
             rule_node_t* qnode = first_node->next;
             rule_t* cur_rule = first_node->rule;
             queue->next = qnode;
             free(first_node);
-            pthread_mutex_unlock(&mutex);
+            sem_post(&sem_lock);
             //If the queue was full, signal the main thread that it is not
             if (full_queue)
             {
@@ -224,8 +235,21 @@ void* helper_thread(void* args)
             }
             
             fake_exec(cur_rule);
+            
+            //Put rule on output queue
+            rule_node_t* out_first = argholder->output_queue;
+            rule_node_t* output = (rule_node_t*)malloc(sizeof(rule_node_t));
+            output->rule = cur_rule;
+            output->next = out_first;
+            argholder->output_queue = output;
         }
+        ql = queue_length(queue) - 1;
     }
+    argholder->done = 1;
+    argholder->threads_not_done--;
+    pthread_cond_broadcast(&queue_empty);
+    pthread_cond_signal(&finished_execution);
+    printf("Thread %d exiting.\n", threadno);
     return NULL;
 }
 
@@ -272,6 +296,7 @@ int main(int argc, char* argv[]) {
 	
 	//Set up queue for targets
 	rule_node_t* rule_queue = (rule_node_t*)(malloc(sizeof(rule_node_t)));
+	rule_node_t* output_queue = (rule_node_t*)(malloc(sizeof(rule_node_t)));
 	//The first "real" entry of rule_queue is the second, so we can change it
 	//while keeping the address of rule_queue constant
 	rule_queue->rule = NULL;
@@ -279,13 +304,19 @@ int main(int argc, char* argv[]) {
 	
 	ARG_HOLDER argholder;
 	argholder.rule_queue = rule_queue;
+	argholder.output_queue = output_queue;
 	argholder.max_queue_length = atoi(queue_size);
-	int done = 0;
-	argholder.done = &done;
+	argholder.threads_not_done = 0;
+	argholder.finished_adding = 0;
+	argholder.done = 0;
 	
 	pthread_mutex_init(&mutex, NULL);
+	pthread_mutex_init(&mutex_main_thread, NULL);
+	sem_init(&sem_lock, 0, 1);
+	pthread_mutex_init(&mutex_done, NULL);
 	pthread_cond_init(&queue_full, NULL);
 	pthread_cond_init(&queue_empty, NULL);
+	pthread_cond_init(&finished_execution, NULL);
 	
 	//Set up threads
 	PTHREAD_NODE* threads = NULL;
@@ -311,12 +342,13 @@ int main(int argc, char* argv[]) {
 	execute_targets(argc, argv, list, &argholder);
 	rule_node_free(list);
 	rule_queue_free(rule_queue);
+	rule_queue_free(output_queue);
 	
 	//Rejoin threads
 	PTHREAD_NODE* pthread_ptr = threads;
 	while (pthread_ptr != NULL)
 	{
-	    printf("Attmpting join.\n");
+	    printf("Attempting join.\n");
         if (pthread_join(*(pthread_ptr->thread),NULL) != 0)
         {
             error("Couldn't join helper thread.");
@@ -332,8 +364,12 @@ int main(int argc, char* argv[]) {
 	}
 	
 	pthread_mutex_destroy(&mutex);
+	pthread_mutex_destroy(&mutex_main_thread);
+	sem_destroy(&sem_lock);
+	pthread_mutex_destroy(&mutex_done);
 	pthread_cond_destroy(&queue_full);
 	pthread_cond_destroy(&queue_empty);
+	pthread_cond_destroy(&finished_execution);
 	
 	return 0;
 }
